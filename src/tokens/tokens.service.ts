@@ -1,95 +1,120 @@
-import { Injectable, Req } from '@nestjs/common';
-import { TOKENS } from 'src/mocks/tokens.mock';
-import { USERS } from 'src/mocks/users.mock';
-import { atob } from 'buffer';
-import console from 'console';
-import { Connection, getConnection } from 'typeorm';
+import { Injectable, Req, Inject, HttpStatus, Res } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { token } from '../tokens/token.entity';
+import { AuthService } from '../auth/auth.service';
+import { Cron, CronExpression } from '@nestjs/schedule';
 
 @Injectable()
 export class TokensService {
-  tokens = TOKENS;
-  users = USERS;
+  constructor(
+    @InjectRepository(token)
+    private tokenRepository: Repository<token>,
+  ) {}
 
-  async getTokenHistory(userToken): Promise<any> {
+  @Inject(AuthService)
+  private readonly userService: AuthService;
+
+  async getTotalHistory(userToken): Promise<any> {
     try {
-      const userDetail = atob(userToken.split(' ')[1]).split(':');
-      const user = USERS.filter(
-        (user) => user.email == userDetail[0] && user.password == userDetail[1],
+      const userDetail = Buffer.from(
+        userToken.split(' ')[1].split(':')[0],
+        'base64',
+      )
+        .toString()
+        .split(':');
+      const userId = await this.userService.getUser(userDetail[0]);
+      if (!userId) {
+        return 'There is no User with the given Email';
+      }
+      const history = await this.tokenRepository.find({
+        where: { user: userId },
+      });
+      console.log(history[0].token + history[0].usd);
+      return (
+        'The total Tokens till today were: ' +
+        history[0].token +
+        ' and the Amount already collected is: ' +
+        history[0].usd
       );
-      const userTokens = TOKENS.filter(
-        (value) => value.userId == user[0].id && value.date == 4,
-      );
-      return userTokens;
     } catch (error) {
-      console.log(error);
+      return error;
     }
   }
 
   async getTodayToken(userToken): Promise<any> {
-    try {
-      const userDetail = atob(userToken.split(' ')[1]).split(':');
-      const user = USERS.filter(
-        (user) => user.email == userDetail[0] && user.password == userDetail[1],
-      );
-      const userTokens = TOKENS.filter(
-        (value) => value.userId == user[0].id && value.date == 4,
-      );
-      let tokenCount = 0;
-      for (let i = 0; i < userTokens.length; i++)
-        tokenCount = tokenCount + userTokens[i].usd;
-      let userTotalUsd = 0;
-      for (let i = 0; i < userTokens.length; i++)
-        userTotalUsd = userTotalUsd + userTokens[i].usd;
-      return `Today won Token ${tokenCount} and total USD ${userTotalUsd}`;
-    } catch (error) {
-      console.log(error);
+    const userDetail = Buffer.from(
+      userToken.split(' ')[1].split(':')[0],
+      'base64',
+    )
+      .toString()
+      .split(':');
+    const userId = await this.userService.getUser(userDetail[0]);
+    if (!userId) {
+      return 'There is no User with the given Email';
     }
+    const tokens = await this.tokenRepository.find({
+      where: { user: userId },
+    });
+    console.log(tokens[0].token);
+    return tokens[0].token;
   }
 
   async getUsdHistory(userToken): Promise<any> {
-    try {
-      const userDetail = atob(userToken.split(' ')[1]).split(':');
-      const user = USERS.filter(
-        (user) => user.email == userDetail[0] && user.password == userDetail[1],
-      );
-      const userTokens = TOKENS.filter((value) => value.userId == user[0].id);
-      let userTotalUsd = 0;
-      for (let i = 0; i < userTokens.length; i++)
-        userTotalUsd = userTotalUsd + userTokens[i].usd;
-      return userTotalUsd;
-    } catch (error) {
-      console.log(error);
+    const userDetail = Buffer.from(
+      userToken.split(' ')[1].split(':')[0],
+      'base64',
+    )
+      .toString()
+      .split(':');
+    const userId = await this.userService.getUser(userDetail[0]);
+    if (!userId) {
+      return 'There is no User with the given Email';
     }
+    const usd = await this.tokenRepository.find({
+      where: { user: userId },
+    });
+    return usd[0].usd;
   }
-  async addToken(@Req() req, userToken): Promise<any> {
+
+  async addToken(@Req() req, @Res() res, userToken): Promise<any> {
     try {
-      const userDetail = atob(userToken.split(' ')[1]).split(':');
-      const user = USERS.filter(
-        (user) => user.email == userDetail[0] && user.password == userDetail[1],
-      );
-
-      const userTokens = TOKENS.filter(
-        (value) => value.date == req.body.date && value.userId == user[0].id,
-      );
-
-      let tokenCount = 0;
-      for (let i = 0; i < userTokens.length; i++)
-        tokenCount = tokenCount + userTokens[i].usd;
-      tokenCount = req.body.token + tokenCount;
-      if (tokenCount < 5) {
-        this.tokens.push({
-          id: userTokens.length + 1,
-          token: req.body.token,
-          usd: req.body.usd,
-          userId: user[0].id,
-          date: req.body.date,
-        });
-        return 'Token successfully Added' + userTokens.length;
-      } else {
-        return 'Max number of token is five.' + userTokens.length;
+      if (req.body.token > 5) {
+        return res
+          .status(HttpStatus.FORBIDDEN)
+          .send('You can only win 5 tokens per day!');
+      }
+      const userDetail = Buffer.from(
+        userToken.split(' ')[1].split(':')[0],
+        'base64',
+      )
+        .toString()
+        .split(':');
+      const userId = await this.userService.getUser(userDetail[0]);
+      if (!userId) {
+        return res
+          .status(HttpStatus.UNAUTHORIZED)
+          .send('There is no User with the given Email');
+      }
+      const userTokens = await this.getTodayToken(userToken);
+      const tokenCount = userTokens + req.body.token;
+      if (tokenCount >= 5) {
+        this.tokenRepository.update(userId, { token: 5 });
+        return res.send('Limit is 5 tokens, so the given are added uptil 5');
+      } else if (tokenCount < 5) {
+        this.tokenRepository.update(userId, { token: 5 });
+        return res.send('Token Added to your Profile. Keep Playing!');
       }
     } catch (error) {
-      console.log(error);
+      return error;
     }
+  }
+
+  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
+  async handleCron() {
+    const tokensArray = await this.tokenRepository.find({});
+    tokensArray.forEach((element) => {
+      element.usd = element.token * 0.15;
+    });
   }
 }

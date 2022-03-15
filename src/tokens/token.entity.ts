@@ -1,16 +1,24 @@
-import { Entity, Column, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  JoinColumn,
+  OneToOne,
+} from 'typeorm';
+import { user } from 'src/auth/auth.entity';
 
 @Entity()
-export class Photo {
+export class token {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column('int')
+  @Column('float')
   token: number;
-
-  @Column('date')
-  date: Date;
 
   @Column('float')
   usd: number;
+
+  @OneToOne(() => user, { nullable: false })
+  @JoinColumn({ name: 'userId' })
+  user: user;
 }
